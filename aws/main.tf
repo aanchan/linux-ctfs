@@ -39,12 +39,21 @@ variable "setup_release_tag" {
   default     = "latest"
 }
 
+variable "existing_instance_profile_name" {
+  description = "Name of an existing IAM instance profile with SSM access (e.g. LabInstanceProfile in AWS Academy Learner Lab). When set, no IAM resources are created."
+  type        = string
+  default     = ""
+}
+
 # Configure the AWS Provider with the variable region
 provider "aws" {
   region = var.aws_region
 }
 
 locals {
+  create_iam_resources  = !var.use_local_setup && var.existing_instance_profile_name == ""
+  instance_profile_name = var.use_local_setup ? null : (var.existing_instance_profile_name != "" ? var.existing_instance_profile_name : aws_iam_instance_profile.ctf_ssm[0].name)
+
   setup_asset_name   = "linux-ctfs-setup.tar.gz"
   setup_release_base = var.setup_release_tag == "latest" ? "https://github.com/learntocloud/linux-ctfs/releases/latest/download" : "https://github.com/learntocloud/linux-ctfs/releases/download/${var.setup_release_tag}"
   setup_release_url  = "${local.setup_release_base}/${local.setup_asset_name}"
@@ -294,7 +303,7 @@ data "aws_ami" "ubuntu" {
 }
 
 data "aws_iam_policy_document" "ctf_ssm_assume_role" {
-  count = var.use_local_setup ? 0 : 1
+  count = local.create_iam_resources ? 1 : 0
 
   statement {
     actions = ["sts:AssumeRole"]
@@ -307,7 +316,7 @@ data "aws_iam_policy_document" "ctf_ssm_assume_role" {
 }
 
 resource "aws_iam_role" "ctf_ssm" {
-  count = var.use_local_setup ? 0 : 1
+  count = local.create_iam_resources ? 1 : 0
 
   name_prefix        = "linux-ctfs-ssm-${var.aws_region}-"
   assume_role_policy = data.aws_iam_policy_document.ctf_ssm_assume_role[0].json
@@ -318,14 +327,14 @@ resource "aws_iam_role" "ctf_ssm" {
 }
 
 resource "aws_iam_role_policy_attachment" "ctf_ssm_managed_instance_core" {
-  count = var.use_local_setup ? 0 : 1
+  count = local.create_iam_resources ? 1 : 0
 
   role       = aws_iam_role.ctf_ssm[0].name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
 resource "aws_iam_instance_profile" "ctf_ssm" {
-  count = var.use_local_setup ? 0 : 1
+  count = local.create_iam_resources ? 1 : 0
 
   name_prefix = "linux-ctfs-ssm-${var.aws_region}-"
   role        = aws_iam_role.ctf_ssm[0].name
@@ -343,7 +352,7 @@ resource "aws_instance" "ctf_instance" {
   subnet_id              = aws_subnet.ctf_subnet.id
 
   associate_public_ip_address = true
-  iam_instance_profile        = var.use_local_setup ? null : aws_iam_instance_profile.ctf_ssm[0].name
+  iam_instance_profile        = local.instance_profile_name
 
   user_data                   = var.use_local_setup ? local.local_bootstrap_script : local.release_setup_script
   user_data_replace_on_change = true
